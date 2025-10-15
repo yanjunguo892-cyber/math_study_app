@@ -1,8 +1,10 @@
 // lib/pages/practice_page.dart
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../database/app_database.dart';
+import '../widgets/handwriting_pad.dart';
 
 class PracticePage extends StatefulWidget {
   const PracticePage({super.key});
@@ -15,8 +17,8 @@ class _PracticePageState extends State<PracticePage> {
   List<Map<String, dynamic>> _qs = [];
   int _index = 0;
   final TextEditingController _ctrl = TextEditingController();
-  String? _selectedOption;
   Map<int, String> _answers = {};
+  bool _showHandwriting = false;
 
   @override
   void didChangeDependencies() {
@@ -34,7 +36,7 @@ class _PracticePageState extends State<PracticePage> {
     setState(() {});
   }
 
-  void _submit() {
+  void _submitAnswer() {
     if (_qs.isEmpty) return;
     final q = _qs[_index];
     final type = q['type'];
@@ -46,14 +48,22 @@ class _PracticePageState extends State<PracticePage> {
     }
     final correct = (q['answer'] ?? '').toString().trim();
     final ok = userAns.isNotEmpty && userAns == correct;
-    showDialog(context: context, builder: (_) => AlertDialog(
-      title: Text(ok ? '回答正确' : '回答错误'),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [
-        if (!ok) Text('正确答案：$correct'),
-        if ((q['explanation'] ?? '').toString().isNotEmpty) Text('解析：${q['explanation']}')
-      ]),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭'))],
-    ));
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(ok ? '回答正确' : '回答错误'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (!ok) Text('正确答案：$correct'),
+          if ((q['explanation'] ?? '').toString().isNotEmpty) Text('解析：${q['explanation']}')
+        ]),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭'))],
+      ),
+    );
+  }
+
+  Future<void> _onHandwritingSave(File f) async {
+    // example: you can attach this image to user's answer or upload
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('草稿已保存：${f.path}')));
   }
 
   @override
@@ -69,42 +79,71 @@ class _PracticePageState extends State<PracticePage> {
       } catch (_) {}
     }
     _ctrl.text = _answers[_index] ?? '';
+
     return Scaffold(
       appBar: AppBar(title: Text('练习 - ${kp['title'] ?? ''}')),
-      body: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(children: [
-          Text('题目 ${_index + 1}/${_qs.length}', style: const TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          Card(child: Padding(padding: const EdgeInsets.all(12), child: Text(q['question'] ?? ''))),
-          const SizedBox(height: 12),
-          if (q['type'] == '判断')
-            Row(children: [
-              ElevatedButton(onPressed: () => setState(() => _answers[_index] = '正确'), child: const Text('正确')),
-              const SizedBox(width: 8),
-              ElevatedButton(onPressed: () => setState(() => _answers[_index] = '错误'), child: const Text('错误')),
-              const SizedBox(width: 12),
-              Text('你的选择：${_answers[_index] ?? ''}'),
-            ])
-          else if (q['type'] == '选择')
-            Column(children: opts.map((o) => RadioListTile<String>(
-              value: o,
-              groupValue: _answers[_index],
-              title: Text(o),
-              onChanged: (v) => setState(() => _answers[_index] = v ?? ''),
-            )).toList())
-          else
-            Column(children: [
-              TextField(controller: _ctrl, decoration: const InputDecoration(labelText: '请输入答案')),
+      body: Column(children: [
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            child: Column(children: [
+              Text('题目 ${_index + 1}/${_qs.length}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+              const SizedBox(height: 12),
+              Card(child: Padding(padding: const EdgeInsets.all(12), child: Text(q['question'] ?? '', style: const TextStyle(fontSize: 16)))),
+              const SizedBox(height: 12),
+              if (q['type'] == '判断')
+                Row(children: [
+                  ElevatedButton(onPressed: () => setState(() => _answers[_index] = '正确'), child: const Text('正确')),
+                  const SizedBox(width: 8),
+                  ElevatedButton(onPressed: () => setState(() => _answers[_index] = '错误'), child: const Text('错误')),
+                  const SizedBox(width: 12),
+                  Text('你的选择：${_answers[_index] ?? ''}'),
+                ])
+              else if (q['type'] == '选择')
+                Column(children: opts.map((o) => RadioListTile<String>(
+                  value: o,
+                  groupValue: _answers[_index],
+                  title: Text(o),
+                  onChanged: (v) => setState(() => _answers[_index] = v ?? ''),
+                )).toList())
+              else
+                Column(children: [
+                  TextField(controller: _ctrl, decoration: const InputDecoration(labelText: '请输入答案')),
+                ]),
             ]),
-          const Spacer(),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            ElevatedButton(onPressed: _index > 0 ? () => setState(() => _index -= 1) : null, child: const Text('上一题')),
-            ElevatedButton(onPressed: _submit, child: const Text('提交')),
-            ElevatedButton(onPressed: _index < _qs.length - 1 ? () => setState(() => _index += 1) : null, child: const Text('下一题')),
-          ])
-        ]),
-      ),
+          ),
+        ),
+
+        // 底部：手写区（可折叠）+ 操作按钮
+        Container(
+          color: Colors.grey.shade50,
+          child: Column(children: [
+            // 折叠手写区的控制栏
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              TextButton.icon(
+                icon: const Icon(Icons.brush),
+                label: Text(_showHandwriting ? '隐藏手写区' : '显示手写区'),
+                onPressed: () => setState(() => _showHandwriting = !_showHandwriting),
+              ),
+              Row(children: [
+                ElevatedButton(onPressed: _index > 0 ? () => setState(() => _index -= 1) : null, child: const Text('上一题')),
+                const SizedBox(width: 12),
+                ElevatedButton(onPressed: _submitAnswer, child: const Text('提交')),
+                const SizedBox(width: 12),
+                ElevatedButton(onPressed: _index < _qs.length - 1 ? () => setState(() => _index += 1) : null, child: const Text('下一题')),
+              ]),
+            ]),
+            if (_showHandwriting)
+              SizedBox(
+                height: 180,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                  child: HandwritingPad(onSave: (file) async => _onHandwritingSave(file)),
+                ),
+              ),
+          ]),
+        ),
+      ]),
     );
   }
 }
